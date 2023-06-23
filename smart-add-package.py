@@ -32,11 +32,7 @@ def load_pacman_packages():
     return results
 
 def load_pkgbases():
-    pkgbases = {}
-    for i in Path('.').rglob('cactus.yaml'):
-        pkgbase = i.parent.name
-        pkgbases[pkgbase] = str(i.parent)
-    return pkgbases
+    return {i.parent.name: str(i.parent) for i in Path('.').rglob('cactus.yaml')}
 
 def read_aur_info(packages):
     logger.info('Reading AUR package information for %s', packages)
@@ -45,8 +41,7 @@ def read_aur_info(packages):
     params.extend(('arg[]', i) for i in packages)
     res = requests.get(AUR_URL, params=params)
     data = res.json()
-    results = {r['Name']: r for r in data['results']}
-    return results
+    return {r['Name']: r for r in data['results']}
 
 def read_provides(package):
     os.environ['LANG'] = 'C'
@@ -55,14 +50,11 @@ def read_provides(package):
     provides = [line for line in info if line.startswith('Provides')][0]
     provides = provides.split(':')[-1].split(' ')
     provides = [i.split('=')[0] for i in provides if len(i) > 0]
-    results = {}
-    for i in provides:
-        results[i] = package
-    return results
+    return {i: package for i in provides}
 
 def load_provides():
     provides = {}
-    provides.update(read_provides('fuse2'))
+    provides |= read_provides('fuse2')
     provides.update(read_provides('libjpeg-turbo'))
     provides.update(read_provides('ttf-dejavu'))
     provides.update(read_provides('ruby-ronn-ng'))
@@ -100,18 +92,18 @@ if __name__ == '__main__':
     pacman_db = load_pacman_packages()
     pkgbases = load_pkgbases()
     provides = load_provides()
-    if not args.provides is None:
+    if args.provides is not None:
         for i in args.provides:
             provides.update(read_provides(i))
 
     unresolved = [args.package]
     resolved = {}
     reversed_depends = {}
-    while len(unresolved) > 0:
+    while unresolved:
         aur_info = read_aur_info(unresolved)
         _unresolved = set()
         for package in unresolved:
-            if not package in aur_info:
+            if package not in aur_info:
                 logger.error('Cannot find %s in AUR.', package)
                 for _package, info in resolved.items():
                     if 'Depends' in info and package in info['Depends']:
@@ -120,19 +112,41 @@ if __name__ == '__main__':
                         logger.error('%s is required by %s', package, _package)
                 sys.exit(1)
 
-            aur_info[package]['Depends'] = [] if not 'Depends' in aur_info[package] else aur_info[package]['Depends']
+            aur_info[package]['Depends'] = (
+                []
+                if 'Depends' not in aur_info[package]
+                else aur_info[package]['Depends']
+            )
             aur_info[package]['Depends'] = [i.split('>')[0].split('=')[0] for i in aur_info[package]['Depends']]
             aur_info[package]['Depends'] = [provides[i] if i in provides else i for i in aur_info[package]['Depends']]
-            aur_info[package]['Depends'] = [i for i in aur_info[package]['Depends'] if not i in pacman_db]
-            _unresolved.update([i for i in aur_info[package]['Depends'] if not i in resolved])
+            aur_info[package]['Depends'] = [
+                i for i in aur_info[package]['Depends'] if i not in pacman_db
+            ]
+            _unresolved.update(
+                [i for i in aur_info[package]['Depends'] if i not in resolved]
+            )
 
-            aur_info[package]['MakeDepends'] = [] if not 'MakeDepends' in aur_info[package] else aur_info[package]['MakeDepends']
+            aur_info[package]['MakeDepends'] = (
+                []
+                if 'MakeDepends' not in aur_info[package]
+                else aur_info[package]['MakeDepends']
+            )
             if not args.nocheck and 'CheckDepends' in aur_info[package]:
                 aur_info[package]['MakeDepends'] += aur_info[package]['CheckDepends']
             aur_info[package]['MakeDepends'] = [i.split('>')[0].split('=')[0] for i in aur_info[package]['MakeDepends']]
             aur_info[package]['MakeDepends'] = [provides[i] if i in provides else i for i in aur_info[package]['MakeDepends']]
-            aur_info[package]['MakeDepends'] = [i for i in aur_info[package]['MakeDepends'] if not i in pacman_db and not i in aur_info[package]['Depends']]
-            _unresolved.update([i for i in aur_info[package]['MakeDepends'] if not i in resolved])
+            aur_info[package]['MakeDepends'] = [
+                i
+                for i in aur_info[package]['MakeDepends']
+                if i not in pacman_db and i not in aur_info[package]['Depends']
+            ]
+            _unresolved.update(
+                [
+                    i
+                    for i in aur_info[package]['MakeDepends']
+                    if i not in resolved
+                ]
+            )
 
             resolved[package] = aur_info[package]
             logger.info('Resolved %s', package)
